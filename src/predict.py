@@ -67,10 +67,10 @@ def load_data(config_file_path, val_proportion=0.10, top_k=-1):
         config = json.load(read_file)
 
     data_directory = config["paths"]["prefix"]
-    baseline_cpsnrs = readBaselineCPSNR(os.path.join(data_directory, "norm.csv"))
+    baseline_cpsnrs = readBaselineCPSNR(os.path.join("..", data_directory, "norm.csv"))
 
-    train_set_directories = getImageSetDirectories(os.path.join(data_directory, "train"))
-    test_set_directories = getImageSetDirectories(os.path.join(data_directory, "test"))
+    train_set_directories = getImageSetDirectories(os.path.join("..", data_directory, "train"))
+    test_set_directories = getImageSetDirectories(os.path.join("..", data_directory, "test"))
 
     # val_proportion = 0.10
     train_list, val_list = train_test_split(train_set_directories,

@@ -8,14 +8,14 @@
   "network": {
     "encoder": {
       "in_channels": 2,
-      "num_layers" : 2,
+      "num_layers": 2,
       "kernel_size": 3,
       "channel_size": 64
     },
     "recursive": {
       "alpha_residual": true,
       "in_channels": 64,
-      "num_layers" : 2,
+      "num_layers": 2,
       "kernel_size": 3
     },
     "decoder": {
@@ -32,28 +32,26 @@
       }
     }
   },
-    
+
   "training": {
-     "num_epochs": 400,
-     "batch_size": 32,
+    "num_epochs": 400,
+    "batch_size": 2,
 
-     "min_L": 32,
-     "n_views": 32,
-     "n_workers": 4,
-     "crop": 3,
+    "min_L": 32,
+    "n_views": 32,
+    "n_workers": 4,
+    "crop": 3,
 
+    "lr": 0.0007,
+    "lr_step": 2,
+    "lr_decay": 0.97,
 
-     "lr": 0.0007,
-     "lr_step": 2,
-     "lr_decay": 0.97,
-
-     "load_lr_maps": false,
-     "beta": 50.0,
+    "load_lr_maps": false,
+    "beta": 50.0,
 
     "create_patches": true,
     "patch_size": 64,
-    "val_proportion": 0.10,
+    "val_proportion": 0.1,
     "lambda": 0.000001
   }
-
 }
