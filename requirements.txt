@@ -30,3 +30,7 @@ jupyter_contrib_nbextensions
 jupyter_nbextensions_configurator
 line_profiler
 ipywidgets
+
+torch-tb-profiler
+
+lpips

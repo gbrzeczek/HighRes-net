@@ -42,9 +42,9 @@
     "n_workers": 4,
     "crop": 3,
 
-    "lr": 0.0007,
+    "lr": 0.00007,
     "lr_step": 2,
-    "lr_decay": 0.97,
+    "lr_decay": 0.98,
 
     "load_lr_maps": false,
     "beta": 50.0,
