@@ -34,3 +34,5 @@ ipywidgets
 torch-tb-profiler
 
 lpips
+
+tabulate
