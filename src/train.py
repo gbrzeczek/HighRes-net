@@ -18,7 +18,7 @@ from DeepNetworks.HRNet import HRNet
 from DeepNetworks.ShiftNet import ShiftNet
 
 from DataLoader import ImagesetDataset
-from Evaluator import shift_cPSNR
+from Evaluator import shift_cPSNR, MultiTaskLossCalculator
 from utils import getImageSetDirectories, readBaselineCPSNR, collateFunction
 from tensorboardX import SummaryWriter
 
@@ -155,9 +155,12 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=config['training']['lr_decay'],
                                                verbose=True, patience=config['training']['lr_step'])
 
-    lpips_loss = lpips.LPIPS(net='vgg').to(device)
+    lpips_loss = lpips.LPIPS(net='alex').to(device)
+
+    validation_loss_calculator = MultiTaskLossCalculator(lpips_loss, device, writer)
 
     for epoch in tqdm(range(1, num_epochs + 1)):
+        epoch_loss_calculator = MultiTaskLossCalculator(lpips_loss, device)
 
         # Train
         fusion_model.train()
@@ -184,19 +187,16 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
             # Training loss
             cropped_mask = torch_mask[0] * hr_maps  # Compute current mask (Batch size, W, H)
-            # srs_shifted = torch.clamp(srs_shifted, min=0.0, max=1.0)  # correct over/under-shoots
-            #loss = -get_loss(srs_shifted, hrs, cropped_mask, metric='cPSNR')
 
-            srs_shifted_normalized = (srs_shifted - 0.5) * 2  # Normalize inputs for LPIPS
-            hrs_normalized = (hrs - 0.5) * 2
+            lpips_values = epoch_loss_calculator.get_lpips(hrs, srs_shifted)
+            cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, cropped_mask)
 
-            # Adjust dimensions for LPIPS
-            # From [batch_size, height, width] to [batch_size, 3, height, width]
-            srs_shifted_normalized = srs_shifted_normalized.unsqueeze(1).repeat(1, 3, 1, 1)  
-            hrs_normalized = hrs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
+            # loss = epoch_loss_calculator.get_weighted_loss(lpips_values, cpsnr_values)
 
-            lpips_value = lpips_loss(srs_shifted_normalized, hrs_normalized)
-            loss = torch.mean(lpips_value)
+            loss = torch.mean(lpips_values)
+
+            epoch_loss_calculator.update(lpips_values, cpsnr_values)
+
             loss += config["training"]["lambda"] * torch.mean(shifts)**2
 
             # Backprop
@@ -209,36 +209,34 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
         fusion_model.eval()
         val_score = 0.0  # monitor val score
 
+        all_cpsnr_values = []
+        all_lpips_values = []
+
         for lrs, alphas, hrs, hr_maps, names in dataloaders['val']:
             lrs = lrs.float().to(device)
             alphas = alphas.float().to(device)
             hrs = hrs.numpy()  # Assuming this is the format before normalization; adjust if necessary
-            hr_maps = hr_maps.numpy()  # Assuming this is needed for another part of your code
 
             # Your existing code to compute SR images
             srs = fusion_model(lrs, alphas)[:, 0]  # fuse multi frames
+            hrs_tensor = torch.from_numpy(hrs).float().to(device)
 
-            # Normalize SR and HR images for LPIPS
-            srs_normalized = (srs - 0.5) * 2  # Normalize SR images from [0, 1] to [-1, 1]
-            # Assuming hrs needs to be moved to the device and normalized
-            hrs_tensor = torch.from_numpy(hrs).float().to(device)  # Convert HR images to tensor and move to device
-            hrs_normalized = (hrs_tensor - 0.5) * 2  # Normalize HR images from [0, 1] to [-1, 1]
+            # copy hr map tensor to device
+            device_hr_maps = hr_maps.float().to(device)
 
-            # Convert to color
-            srs_normalized = srs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)  # Adjust dimensions for LPIPS
-            hrs_normalized = hrs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
+            cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, device_hr_maps)
+            lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
 
-            # Compute LPIPS for evaluation
-            lpips_scores = lpips_loss(srs_normalized, hrs_normalized)  # This will give a batch of scores
-            lpips_mean_score = torch.mean(lpips_scores).item()  # Get mean score for the batch
-
-            # Update your validation score calculation as needed
-            # For example, to accumulate average LPIPS score across all validation data:
-            val_score += lpips_mean_score * srs.size(0)  # Multiply by batch size to accumulate correctly
+            all_cpsnr_values.append(cpsnr_values.detach().cpu())
+            all_lpips_values.append(lpips_values.detach().cpu())
 
             srs = srs.detach().cpu().numpy()
 
-        val_score /= len(dataloaders['val'].dataset)
+        #val_score = validation_loss_calculator.get_weighted_loss(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
+        val_score = torch.mean(torch.cat(all_lpips_values)).item()
+        validation_loss_calculator.update(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
+
+        #val_score /= len(dataloaders['val'].dataset)
 
         if best_score > val_score:
             torch.save(fusion_model.state_dict(),

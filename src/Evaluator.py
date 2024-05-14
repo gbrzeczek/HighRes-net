@@ -1,12 +1,15 @@
 """ Python script to evaluate super resolved images against ground truth high resolution images """
 
 import itertools
+import math
 
 import numpy as np
 from tqdm import tqdm
+from torch import nn
 
 from DataLoader import get_patch
 
+import torch
 
 def cPSNR(sr, hr, hr_map):
     """
@@ -42,12 +45,18 @@ def cPSNR(sr, hr, hr_map):
 
     return cPSNR
 
+def cPSNR_torch(srs, hrs, hr_maps):
+    criterion = nn.MSELoss(reduction='none')
+    nclear = torch.sum(hr_maps, dim=(1, 2))  # Number of clear pixels in target image
+    bright = torch.sum(hr_maps * (hrs - srs), dim=(1, 2)).clone().detach() / nclear  # Correct for brightness
+    loss = torch.sum(hr_maps * criterion(srs + bright.view(-1, 1, 1), hrs), dim=(1, 2)) / nclear  # cMSE(A,B) for each point
+
+    return -10 * torch.log10(loss)
 
 def patch_iterator(img, positions, size):
     """Iterator across square patches of `img` located in `positions`."""
     for x, y in positions:
         yield get_patch(img=img, x=x, y=y, size=size)
-
 
 def shift_cPSNR(sr, hr, hr_map, border_w=3):
     """
@@ -71,3 +80,79 @@ def shift_cPSNR(sr, hr, hr_map, border_w=3):
                            ])
     max_cPSNR = np.max(site_cPSNR, axis=0)
     return max_cPSNR
+
+class MultiTaskLossCalculator:
+    def __init__(self, lpips_loss, device, writer=None):
+        self._lpips_loss = lpips_loss
+        self._device = device
+
+        self._metric_count = 2
+        self._temperature = 0.1
+
+        self._counter = 1
+
+        self._cPSNR_metric_name = 'cPSNR'
+        self._lpips_metric_name = 'lpips'
+        self._losses = {self._cPSNR_metric_name: [], self._lpips_metric_name: []}
+
+        self._writer = writer
+    
+    def get_lpips(self, hrs, srs):
+        srs_normalized = (srs - 0.5) * 2
+        hrs_normalized = (hrs - 0.5) * 2
+
+        srs_normalized = srs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
+        hrs_normalized = hrs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
+
+        lpips_scores = self._lpips_loss(srs_normalized, hrs_normalized)
+
+        return lpips_scores
+    
+    def get_cPSNR(self, hrs, srs, cropped_masks):
+        return cPSNR_torch(srs, hrs, cropped_masks)
+    
+    def get_weighted_loss(self, lpips_values, cpsnr_values):
+        mean_lpips = torch.mean(lpips_values).item()
+        mean_cpsnr = torch.mean(cpsnr_values).item()
+
+        if self._writer:
+            self._writer.add_scalar('lpips', mean_lpips, self._counter)
+            self._writer.add_scalar('cPSNR', mean_cpsnr, self._counter)
+
+        normalized_cpsnr = self._normalize_cpsnr(mean_cpsnr)
+        return self._get_weighted_loss(mean_lpips, normalized_cpsnr)
+    
+    def update(self, lpips_values, cpsnr_values):
+        self._losses[self._lpips_metric_name].append(torch.mean(lpips_values).item())
+        self._losses[self._cPSNR_metric_name].append(torch.mean(cpsnr_values).item())
+
+        self._counter += 1
+    
+    def _normalize_cpsnr(self, mean_cpsnr):
+        return 1 / mean_cpsnr # TODO evaluate, it may not be good
+    
+    def _get_weighted_loss(self, lpips_value, cPSNR_value):
+        weight_lpips, weight_cPSNR = self._get_weights()
+
+        if self._writer:
+            self._writer.add_scalar('weight_lpips', weight_lpips, self._counter)
+            self._writer.add_scalar('weight_cPSNR', weight_cPSNR, self._counter)
+
+        return weight_lpips * lpips_value + weight_cPSNR * cPSNR_value
+
+    def _get_weights(self):
+        if len(self._losses['lpips']) < 2 or len(self._losses['cPSNR']) < 2:
+            return 0.5, 0.5
+
+        rn_lpips = self._losses['lpips'][-1] / self._losses['lpips'][-2]
+        rn_cPSNR = self._losses['cPSNR'][-1] / self._losses['cPSNR'][-2]
+
+        numerator_lpips = self._metric_count * math.exp(rn_lpips * self._temperature)
+        numerator_cPSNR = self._metric_count * math.exp(rn_cPSNR * self._temperature)
+
+        denominator = numerator_lpips / 2 + numerator_cPSNR / 2
+
+        weight_lpips = numerator_lpips / denominator
+        weight_cPSNR = numerator_cPSNR / denominator
+
+        return weight_lpips, weight_cPSNR
