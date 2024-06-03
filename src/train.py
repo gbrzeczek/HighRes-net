@@ -157,6 +157,10 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
     lpips_loss = lpips.LPIPS(net='alex').to(device)
 
+    # freeze all the layers of lpips_loss
+    for param in lpips_loss.parameters():
+        param.requires_grad = False
+
     validation_loss_calculator = MultiTaskLossCalculator(lpips_loss, device, writer)
 
     for epoch in tqdm(range(1, num_epochs + 1)):
@@ -169,7 +173,6 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
         # Iterate over data.
         for lrs, alphas, hrs, hr_maps, names in tqdm(dataloaders['train']):
-
             optimizer.zero_grad()  # zero the parameter gradients
             lrs = lrs.float().to(device)
             alphas = alphas.float().to(device)
@@ -186,16 +189,16 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
             srs_shifted = apply_shifts(regis_model, srs, shifts, device)[:, 0]
 
             # Training loss
-            cropped_mask = torch_mask[0] * hr_maps  # Compute current mask (Batch size, W, H)
+            #cropped_mask = torch_mask[0] * hr_maps  # Compute current mask (Batch size, W, H)
 
-            lpips_values = epoch_loss_calculator.get_lpips(hrs, srs_shifted)
-            cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, cropped_mask)
+            lpips_values = epoch_loss_calculator.get_lpips_with_random_shift(hrs, srs_shifted)
+            #cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, cropped_mask)
 
             # loss = epoch_loss_calculator.get_weighted_loss(lpips_values, cpsnr_values)
 
             loss = torch.mean(lpips_values)
 
-            epoch_loss_calculator.update(lpips_values, cpsnr_values)
+            #epoch_loss_calculator.update(lpips_values, cpsnr_values)
 
             loss += config["training"]["lambda"] * torch.mean(shifts)**2
 
@@ -222,19 +225,19 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
             hrs_tensor = torch.from_numpy(hrs).float().to(device)
 
             # copy hr map tensor to device
-            device_hr_maps = hr_maps.float().to(device)
+            #device_hr_maps = hr_maps.float().to(device)
 
-            cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, device_hr_maps)
+            #cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, device_hr_maps)
             lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
 
-            all_cpsnr_values.append(cpsnr_values.detach().cpu())
+            #all_cpsnr_values.append(cpsnr_values.detach().cpu())
             all_lpips_values.append(lpips_values.detach().cpu())
 
             srs = srs.detach().cpu().numpy()
 
         #val_score = validation_loss_calculator.get_weighted_loss(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
         val_score = torch.mean(torch.cat(all_lpips_values)).item()
-        validation_loss_calculator.update(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
+        #validation_loss_calculator.update(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
 
         #val_score /= len(dataloaders['val'].dataset)
 

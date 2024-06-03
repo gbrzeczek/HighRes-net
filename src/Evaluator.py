@@ -58,6 +58,22 @@ def patch_iterator(img, positions, size):
     for x, y in positions:
         yield get_patch(img=img, x=x, y=y, size=size)
 
+def get_patch_tensor(img, x, y, size=32):
+    """
+    Slices out a square patch from `img` tensor starting from the (x, y) top-left corner.
+    This function assumes `img` is a tensor and can handle 3D (single image) or 4D (batch of images) tensors.
+    Args:
+        img: torch.Tensor, input image tensor with shape (C, H, W) or (N, C, H, W)
+        x, y: int, top-left corner coordinates of the patch
+        size: int, size of the square patch
+    Returns:
+        patch: torch.Tensor, extracted patch of shape (C, size, size) or (N, C, size, size)
+    """
+    if img.dim() == 3:  # Single image
+        return img[:, x:(x + size), y:(y + size)]
+    elif img.dim() == 4:  # Batch of images
+        return img[:, :, x:(x + size), y:(y + size)]
+
 def shift_cPSNR(sr, hr, hr_map, border_w=3):
     """
     cPSNR score adjusted for registration errors. Computes the max cPSNR score across shifts of up to `border_w` pixels.
@@ -107,6 +123,54 @@ class MultiTaskLossCalculator:
         lpips_scores = self._lpips_loss(srs_normalized, hrs_normalized)
 
         return lpips_scores
+
+    def get_val_lpips(self, hrs, srs, border_w=3):
+        # Normalize images
+        srs_normalized = (srs - 0.5) * 2
+        hrs_normalized = (hrs - 0.5) * 2
+
+        # Replicate channels to fit LPIPS input requirements (expects 3-channel images)
+        srs_normalized = srs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
+        hrs_normalized = hrs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
+
+        # Initialize a large value to store minimum LPIPS scores
+        min_lpips_scores = torch.full((srs_normalized.shape[0],), float('inf')).to(self._device)
+
+        # Generate all possible shifts within the border width
+        for dx in range(-border_w, border_w + 1):
+            for dy in range(-border_w, border_w + 1):
+                # Apply shifts safely without padding
+                shifted_srs = torch.roll(srs_normalized, shifts=(dx, dy), dims=(2, 3))
+                shifted_hrs = torch.roll(hrs_normalized, shifts=(dx, dy), dims=(2, 3))
+
+                # Calculate LPIPS for current shift
+                current_lpips_scores = self._lpips_loss(shifted_srs, shifted_hrs)
+
+                # Update minimum scores
+                min_lpips_scores = torch.min(min_lpips_scores, current_lpips_scores)
+
+        return min_lpips_scores
+    
+    def get_lpips_with_random_shift(self, hrs, srs, border_w=3):
+        crop_top = np.random.randint(0, border_w + 1)
+        crop_left = np.random.randint(0, border_w + 1)
+        crop_bottom = border_w - crop_top
+        crop_right = border_w - crop_left
+        
+        if crop_bottom == 0 and crop_right == 0:
+            hrs_cropped = hrs[:, crop_top:, crop_left:]
+            srs_cropped = srs[:, crop_top:, crop_left:]
+        elif crop_bottom == 0:
+            hrs_cropped = hrs[:, crop_top:, crop_left:-crop_right]
+            srs_cropped = srs[:, crop_top:, crop_left:-crop_right]
+        elif crop_right == 0:
+            hrs_cropped = hrs[:, crop_top:-crop_bottom, crop_left:]
+            srs_cropped = srs[:, crop_top:-crop_bottom, crop_left:]
+        else:
+            hrs_cropped = hrs[:, crop_top:-crop_bottom, crop_left:-crop_right]
+            srs_cropped = srs[:, crop_top:-crop_bottom, crop_left:-crop_right]
+
+        return self.get_lpips(hrs_cropped, srs_cropped)
     
     def get_cPSNR(self, hrs, srs, cropped_masks):
         return cPSNR_torch(srs, hrs, cropped_masks)
