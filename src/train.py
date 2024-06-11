@@ -193,6 +193,9 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
             lpips_values = epoch_loss_calculator.get_lpips_with_random_shift(hrs, srs_shifted)
             #cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, cropped_mask)
+            _ = epoch_loss_calculator.get_total_variation_loss(srs_shifted)
+
+            epoch_loss_calculator.update_counter()
 
             # loss = epoch_loss_calculator.get_weighted_loss(lpips_values, cpsnr_values)
 
@@ -229,6 +232,9 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
             #cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, device_hr_maps)
             lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
+            _ = validation_loss_calculator.get_total_variation_loss(srs)
+
+            validation_loss_calculator.update_counter()
 
             #all_cpsnr_values.append(cpsnr_values.detach().cpu())
             all_lpips_values.append(lpips_values.detach().cpu())

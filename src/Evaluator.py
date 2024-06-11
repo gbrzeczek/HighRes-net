@@ -151,7 +151,7 @@ class MultiTaskLossCalculator:
 
         return min_lpips_scores
     
-    def get_lpips_with_random_shift(self, hrs, srs, border_w=3):
+    def get_lpips_with_random_shift(self, hrs, srs, border_w=5):
         crop_top = np.random.randint(0, border_w + 1)
         crop_left = np.random.randint(0, border_w + 1)
         crop_bottom = border_w - crop_top
@@ -172,6 +172,35 @@ class MultiTaskLossCalculator:
 
         return self.get_lpips(hrs_cropped, srs_cropped)
     
+    def get_total_variation_loss(self, img):
+        """
+        Compute the Total Variation Loss.
+
+        Parameters:
+        - img (torch.Tensor): A 4D tensor of shape (batch_size, channels, height, width)
+                                            or (batch_size, height, width) for grayscale images.
+
+        Returns:
+        - torch.Tensor: Scalar tensor containing the total variation loss.
+        """
+        if img.dim() == 3:
+            img = img.unsqueeze(1)
+
+        image_count = img.shape[0]
+
+        # Calculate the difference of horizontally and vertically adjacent pixels
+        horizontal_tv = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:])
+        vertical_tv = torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
+
+        # Sum up the total variation
+        loss = horizontal_tv.sum() + vertical_tv.sum()
+        avg_loss = loss / image_count
+
+        if self._writer:
+            self._writer.add_scalar('total_variation', avg_loss, self._counter)
+
+        return avg_loss
+    
     def get_cPSNR(self, hrs, srs, cropped_masks):
         return cPSNR_torch(srs, hrs, cropped_masks)
     
@@ -190,6 +219,9 @@ class MultiTaskLossCalculator:
         self._losses[self._lpips_metric_name].append(torch.mean(lpips_values).item())
         self._losses[self._cPSNR_metric_name].append(torch.mean(cpsnr_values).item())
 
+        self._counter += 1
+
+    def update_counter(self):
         self._counter += 1
     
     def _normalize_cpsnr(self, mean_cpsnr):
