@@ -101,16 +101,7 @@ class MultiTaskLossCalculator:
     def __init__(self, lpips_loss, device, writer=None):
         self._lpips_loss = lpips_loss
         self._device = device
-
-        self._metric_count = 2
-        self._temperature = 0.1
-
         self._counter = 1
-
-        self._cPSNR_metric_name = 'cPSNR'
-        self._lpips_metric_name = 'lpips'
-        self._losses = {self._cPSNR_metric_name: [], self._lpips_metric_name: []}
-
         self._writer = writer
     
     def get_lpips(self, hrs, srs):
@@ -123,132 +114,41 @@ class MultiTaskLossCalculator:
         lpips_scores = self._lpips_loss(srs_normalized, hrs_normalized)
 
         return lpips_scores
-
-    def get_val_lpips(self, hrs, srs, border_w=3):
-        # Normalize images
-        srs_normalized = (srs - 0.5) * 2
-        hrs_normalized = (hrs - 0.5) * 2
-
-        # Replicate channels to fit LPIPS input requirements (expects 3-channel images)
-        srs_normalized = srs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
-        hrs_normalized = hrs_normalized.unsqueeze(1).repeat(1, 3, 1, 1)
-
-        # Initialize a large value to store minimum LPIPS scores
-        min_lpips_scores = torch.full((srs_normalized.shape[0],), float('inf')).to(self._device)
-
-        # Generate all possible shifts within the border width
-        for dx in range(-border_w, border_w + 1):
-            for dy in range(-border_w, border_w + 1):
-                # Apply shifts safely without padding
-                shifted_srs = torch.roll(srs_normalized, shifts=(dx, dy), dims=(2, 3))
-                shifted_hrs = torch.roll(hrs_normalized, shifts=(dx, dy), dims=(2, 3))
-
-                # Calculate LPIPS for current shift
-                current_lpips_scores = self._lpips_loss(shifted_srs, shifted_hrs)
-
-                # Update minimum scores
-                min_lpips_scores = torch.min(min_lpips_scores, current_lpips_scores)
-
-        return min_lpips_scores
-    
-    def get_lpips_with_random_shift(self, hrs, srs, border_w=5):
-        crop_top = np.random.randint(0, border_w + 1)
-        crop_left = np.random.randint(0, border_w + 1)
-        crop_bottom = border_w - crop_top
-        crop_right = border_w - crop_left
-        
-        if crop_bottom == 0 and crop_right == 0:
-            hrs_cropped = hrs[:, crop_top:, crop_left:]
-            srs_cropped = srs[:, crop_top:, crop_left:]
-        elif crop_bottom == 0:
-            hrs_cropped = hrs[:, crop_top:, crop_left:-crop_right]
-            srs_cropped = srs[:, crop_top:, crop_left:-crop_right]
-        elif crop_right == 0:
-            hrs_cropped = hrs[:, crop_top:-crop_bottom, crop_left:]
-            srs_cropped = srs[:, crop_top:-crop_bottom, crop_left:]
-        else:
-            hrs_cropped = hrs[:, crop_top:-crop_bottom, crop_left:-crop_right]
-            srs_cropped = srs[:, crop_top:-crop_bottom, crop_left:-crop_right]
-
-        return self.get_lpips(hrs_cropped, srs_cropped)
     
     def get_total_variation_loss(self, img):
-        """
-        Compute the Total Variation Loss.
-
-        Parameters:
-        - img (torch.Tensor): A 4D tensor of shape (batch_size, channels, height, width)
-                                            or (batch_size, height, width) for grayscale images.
-
-        Returns:
-        - torch.Tensor: Scalar tensor containing the total variation loss.
-        """
         if img.dim() == 3:
             img = img.unsqueeze(1)
 
-        image_count = img.shape[0]
-
-        # Calculate the difference of horizontally and vertically adjacent pixels
         horizontal_tv = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:])
         vertical_tv = torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
 
-        # Sum up the total variation
-        loss = horizontal_tv.sum() + vertical_tv.sum()
-        avg_loss = loss / image_count
+        losses = horizontal_tv.sum() + vertical_tv.sum()
 
-        if self._writer:
-            self._writer.add_scalar('total_variation', avg_loss, self._counter)
-
-        return avg_loss
-    
+        return losses
+        
     def get_cPSNR(self, hrs, srs, cropped_masks):
         return cPSNR_torch(srs, hrs, cropped_masks)
     
-    def get_weighted_loss(self, lpips_values, cpsnr_values):
-        mean_lpips = torch.mean(lpips_values).item()
-        mean_cpsnr = torch.mean(cpsnr_values).item()
+    def get_simple_weighted_loss(self, lpips_values, tv_values):
+        lpips_weight = 0.7
+        tv_weight = 0.3
+
+        mean_lpips = torch.mean(lpips_values)
+        mean_tv = torch.mean(tv_values)
 
         if self._writer:
             self._writer.add_scalar('lpips', mean_lpips, self._counter)
-            self._writer.add_scalar('cPSNR', mean_cpsnr, self._counter)
+            self._writer.add_scalar('tv', mean_tv, self._counter)
 
-        normalized_cpsnr = self._normalize_cpsnr(mean_cpsnr)
-        return self._get_weighted_loss(mean_lpips, normalized_cpsnr)
-    
-    def update(self, lpips_values, cpsnr_values):
-        self._losses[self._lpips_metric_name].append(torch.mean(lpips_values).item())
-        self._losses[self._cPSNR_metric_name].append(torch.mean(cpsnr_values).item())
+        lpips_w = mean_lpips * lpips_weight
+        tv_w = self._normalize_tv(mean_tv) * tv_weight
 
-        self._counter += 1
+        return lpips_w + tv_w
 
     def update_counter(self):
         self._counter += 1
-    
-    def _normalize_cpsnr(self, mean_cpsnr):
-        return 1 / mean_cpsnr # TODO evaluate, it may not be good
-    
-    def _get_weighted_loss(self, lpips_value, cPSNR_value):
-        weight_lpips, weight_cPSNR = self._get_weights()
 
-        if self._writer:
-            self._writer.add_scalar('weight_lpips', weight_lpips, self._counter)
-            self._writer.add_scalar('weight_cPSNR', weight_cPSNR, self._counter)
+    def _normalize_tv(self, tv_value):
+        top_value = 1500
 
-        return weight_lpips * lpips_value + weight_cPSNR * cPSNR_value
-
-    def _get_weights(self):
-        if len(self._losses['lpips']) < 2 or len(self._losses['cPSNR']) < 2:
-            return 0.5, 0.5
-
-        rn_lpips = self._losses['lpips'][-1] / self._losses['lpips'][-2]
-        rn_cPSNR = self._losses['cPSNR'][-1] / self._losses['cPSNR'][-2]
-
-        numerator_lpips = self._metric_count * math.exp(rn_lpips * self._temperature)
-        numerator_cPSNR = self._metric_count * math.exp(rn_cPSNR * self._temperature)
-
-        denominator = numerator_lpips / 2 + numerator_cPSNR / 2
-
-        weight_lpips = numerator_lpips / denominator
-        weight_cPSNR = numerator_cPSNR / denominator
-
-        return weight_lpips, weight_cPSNR
+        return tv_value / top_value

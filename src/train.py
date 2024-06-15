@@ -188,20 +188,12 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
                                     reference=hrs[:, offset:(offset + 128), offset:(offset + 128)].view(-1, 1, 128, 128))
             srs_shifted = apply_shifts(regis_model, srs, shifts, device)[:, 0]
 
-            # Training loss
-            #cropped_mask = torch_mask[0] * hr_maps  # Compute current mask (Batch size, W, H)
 
-            lpips_values = epoch_loss_calculator.get_lpips_with_random_shift(hrs, srs_shifted)
-            #cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, cropped_mask)
-            _ = epoch_loss_calculator.get_total_variation_loss(srs_shifted)
+            lpips_values = epoch_loss_calculator.get_lpips(hrs, srs_shifted)
+            tv_values = epoch_loss_calculator.get_total_variation_loss(srs_shifted)
+            loss = epoch_loss_calculator.get_simple_weighted_loss(lpips_values, tv_values)
 
             epoch_loss_calculator.update_counter()
-
-            # loss = epoch_loss_calculator.get_weighted_loss(lpips_values, cpsnr_values)
-
-            loss = torch.mean(lpips_values)
-
-            #epoch_loss_calculator.update(lpips_values, cpsnr_values)
 
             loss += config["training"]["lambda"] * torch.mean(shifts)**2
 
@@ -215,7 +207,7 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
         fusion_model.eval()
         val_score = 0.0  # monitor val score
 
-        all_cpsnr_values = []
+        all_tv_values = []
         all_lpips_values = []
 
         for lrs, alphas, hrs, hr_maps, names in dataloaders['val']:
@@ -227,25 +219,21 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
             srs = fusion_model(lrs, alphas)[:, 0]  # fuse multi frames
             hrs_tensor = torch.from_numpy(hrs).float().to(device)
 
-            # copy hr map tensor to device
-            #device_hr_maps = hr_maps.float().to(device)
-
-            #cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, device_hr_maps)
             lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
-            _ = validation_loss_calculator.get_total_variation_loss(srs)
+            tv_values = validation_loss_calculator.get_total_variation_loss(srs)
 
-            validation_loss_calculator.update_counter()
-
-            #all_cpsnr_values.append(cpsnr_values.detach().cpu())
             all_lpips_values.append(lpips_values.detach().cpu())
+            all_tv_values.append(tv_values.detach().cpu())
 
             srs = srs.detach().cpu().numpy()
 
-        #val_score = validation_loss_calculator.get_weighted_loss(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
-        val_score = torch.mean(torch.cat(all_lpips_values)).item()
-        #validation_loss_calculator.update(torch.cat(all_lpips_values), torch.cat(all_cpsnr_values))
+        concated_lpips = torch.cat(all_lpips_values)
+        concated_tv = torch.cat([t.unsqueeze(0) for t in all_tv_values])
 
-        #val_score /= len(dataloaders['val'].dataset)
+        val_score = validation_loss_calculator.get_simple_weighted_loss(concated_lpips, concated_tv)
+        
+        #validation_loss_calculator.update(concated_lpips, concated_tv)
+        validation_loss_calculator.update_counter()
 
         if best_score > val_score:
             torch.save(fusion_model.state_dict(),
