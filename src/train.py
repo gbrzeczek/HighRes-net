@@ -1,6 +1,7 @@
 """ Python script to train HRNet + shiftNet for multi frame super resolution (MFSR) """
 
 import json
+import math
 import os
 import datetime
 import numpy as np
@@ -106,6 +107,31 @@ def get_crop_mask(patch_size, crop_size):
     torch_mask = torch.from_numpy(mask).type(torch.FloatTensor)
     return torch_mask
 
+def get_weights(losses_1, losses_2):
+    temperature = 0.5
+    N = 2  # number of tasks
+    
+    if len(losses_1) < 2 or len(losses_2) < 2:
+        return 0.5, 0.5
+    
+    rn_1 = losses_1[-1] / losses_1[-2]
+
+    # cpsnr case, it will be negative
+    rn_2 = losses_2[-2] / losses_2[-1]
+    
+    numerator_1 = math.exp(rn_1 / temperature)
+    numerator_2 = math.exp(rn_2 / temperature)
+    
+    denominator = numerator_1 + numerator_2
+    
+    weight_1 = numerator_1 / denominator
+    weight_2 = numerator_2 / denominator
+    
+    return weight_1, weight_2
+
+def normalize_cpsnr(cpsnr):
+    divider = 50
+    return -cpsnr / divider
 
 def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, baseline_cpsnrs, config):
     """
@@ -163,8 +189,14 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
     validation_loss_calculator = MultiTaskLossCalculator(lpips_loss, device, writer)
 
+    val_losses_1 = []
+    val_losses_2 = []
+
     for epoch in tqdm(range(1, num_epochs + 1)):
         epoch_loss_calculator = MultiTaskLossCalculator(lpips_loss, device)
+
+        losses_1 = []
+        losses_2 = []
 
         # Train
         fusion_model.train()
@@ -190,8 +222,25 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
 
             lpips_values = epoch_loss_calculator.get_lpips(hrs, srs_shifted)
-            tv_values = epoch_loss_calculator.get_total_variation_loss(srs_shifted)
-            loss = epoch_loss_calculator.get_simple_weighted_loss(lpips_values, tv_values)
+            cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, hr_maps)
+            # loss = epoch_loss_calculator.get_simple_weighted_loss(lpips_values, tv_values)
+
+            mean_lpips = torch.mean(lpips_values)
+
+            normalized_cpsnr = normalize_cpsnr(torch.mean(cpsnr_values))
+
+            w1, w2 = get_weights(losses_1, losses_2)
+
+            loss_1 = mean_lpips * w1
+            loss_2 = normalized_cpsnr * w2
+
+            loss = loss_1 + loss_2
+
+            detached_lpis = mean_lpips.detach().cpu().numpy()
+            detached_cpsnr = normalized_cpsnr.detach().cpu().numpy()
+
+            losses_1.append(detached_lpis)
+            losses_2.append(detached_cpsnr)
 
             epoch_loss_calculator.update_counter()
 
@@ -207,30 +256,44 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
         fusion_model.eval()
         val_score = 0.0  # monitor val score
 
-        all_tv_values = []
+        all_cpsnr_values = []
         all_lpips_values = []
 
         for lrs, alphas, hrs, hr_maps, names in dataloaders['val']:
             lrs = lrs.float().to(device)
             alphas = alphas.float().to(device)
             hrs = hrs.numpy()  # Assuming this is the format before normalization; adjust if necessary
+            hr_maps = hr_maps.float().to(device)
 
             # Your existing code to compute SR images
             srs = fusion_model(lrs, alphas)[:, 0]  # fuse multi frames
             hrs_tensor = torch.from_numpy(hrs).float().to(device)
 
             lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
-            tv_values = validation_loss_calculator.get_total_variation_loss(srs)
+            cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, hr_maps)
 
             all_lpips_values.append(lpips_values.detach().cpu())
-            all_tv_values.append(tv_values.detach().cpu())
+            all_cpsnr_values.append(cpsnr_values.detach().cpu())
 
             srs = srs.detach().cpu().numpy()
 
         concated_lpips = torch.cat(all_lpips_values)
-        concated_tv = torch.cat([t.unsqueeze(0) for t in all_tv_values])
+        # concated_tv = torch.cat([t.unsqueeze(0) for t in all_tv_values])
+        concated_cpnsr = torch.cat(all_cpsnr_values)
 
-        val_score = validation_loss_calculator.get_simple_weighted_loss(concated_lpips, concated_tv)
+        #val_score = validation_loss_calculator.get_simple_weighted_loss(concated_lpips, concated_cpnsr)
+        w1, w2 = get_weights([], [])
+
+        mean_lpips = torch.mean(concated_lpips)
+        normalized_cpsnr = normalize_cpsnr(torch.mean(concated_cpnsr))
+        
+        val_score = mean_lpips * w1 + normalized_cpsnr * w2
+
+        #detached_lpis = mean_lpips.detach().cpu().numpy()
+        #detached_cpsnr = normalized_cpsnr.detach().cpu().numpy()
+
+        #val_losses_1.append(detached_lpis)
+        #val_losses_2.append(detached_cpsnr)
         
         #validation_loss_calculator.update(concated_lpips, concated_tv)
         validation_loss_calculator.update_counter()
