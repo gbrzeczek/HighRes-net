@@ -10,3 +10,5 @@ models
 images
 images_test
 all_images
+images_zoomed
+notebooks/saved_images
