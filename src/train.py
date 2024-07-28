@@ -107,31 +107,37 @@ def get_crop_mask(patch_size, crop_size):
     torch_mask = torch.from_numpy(mask).type(torch.FloatTensor)
     return torch_mask
 
-def get_weights(losses_1, losses_2):
+def get_weights(losses_1, losses_2, losses_3):
     temperature = 0.5
-    N = 2  # number of tasks
     
-    if len(losses_1) < 2 or len(losses_2) < 2:
-        return 0.5, 0.5
+    if len(losses_1) < 2 or len(losses_2) < 2 or len(losses_3) < 2:
+        return 0.5, 0.5, 0.15
     
     rn_1 = losses_1[-1] / losses_1[-2]
 
     # cpsnr case, it will be negative
     rn_2 = losses_2[-2] / losses_2[-1]
+    rn_3 = losses_3[-1] / losses_3[-2]
     
     numerator_1 = math.exp(rn_1 / temperature)
     numerator_2 = math.exp(rn_2 / temperature)
+    numerator_3 = math.exp(rn_3 / temperature)
     
-    denominator = numerator_1 + numerator_2
+    denominator = numerator_1 + numerator_2 + numerator_3
     
     weight_1 = numerator_1 / denominator
     weight_2 = numerator_2 / denominator
+    weight_3 = numerator_3 / denominator
     
-    return weight_1, weight_2
+    return weight_1, weight_2, weight_3
 
 def normalize_cpsnr(cpsnr):
     divider = 50
     return -cpsnr / divider
+
+def normalize_tv(tv):
+    divider = 65000
+    return tv / divider
 
 def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, baseline_cpsnrs, config):
     """
@@ -189,14 +195,12 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
     validation_loss_calculator = MultiTaskLossCalculator(lpips_loss, device, writer)
 
-    val_losses_1 = []
-    val_losses_2 = []
-
     for epoch in tqdm(range(1, num_epochs + 1)):
         epoch_loss_calculator = MultiTaskLossCalculator(lpips_loss, device)
 
         losses_1 = []
         losses_2 = []
+        losses_3 = []
 
         # Train
         fusion_model.train()
@@ -223,24 +227,28 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
             lpips_values = epoch_loss_calculator.get_lpips(hrs, srs_shifted)
             cpsnr_values = epoch_loss_calculator.get_cPSNR(hrs, srs_shifted, hr_maps)
-            # loss = epoch_loss_calculator.get_simple_weighted_loss(lpips_values, tv_values)
+            tv_values = epoch_loss_calculator.get_total_variation_loss(srs_shifted)
 
             mean_lpips = torch.mean(lpips_values)
 
-            normalized_cpsnr = normalize_cpsnr(torch.mean(cpsnr_values))
+            normalized_cpnsr = normalize_cpsnr(torch.mean(cpsnr_values))
+            normalized_tv = normalize_tv(torch.mean(tv_values))
 
-            w1, w2 = get_weights(losses_1, losses_2)
+            w1, w2, w3 = get_weights(losses_1, losses_2, losses_3)
 
             loss_1 = mean_lpips * w1
-            loss_2 = normalized_cpsnr * w2
+            loss_2 = normalized_cpnsr * w2
+            loss_3 = normalized_tv * w2
 
-            loss = loss_1 + loss_2
+            loss = loss_1 + loss_2 + loss_3
 
             detached_lpis = mean_lpips.detach().cpu().numpy()
-            detached_cpsnr = normalized_cpsnr.detach().cpu().numpy()
+            detached_cpsnr = normalized_tv.detach().cpu().numpy()
+            detached_tv = normalized_tv.detach().cpu().numpy()
 
             losses_1.append(detached_lpis)
             losses_2.append(detached_cpsnr)
+            losses_3.append(detached_tv)
 
             epoch_loss_calculator.update_counter()
 
@@ -258,6 +266,7 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
         all_cpsnr_values = []
         all_lpips_values = []
+        all_tv_values = []
 
         for lrs, alphas, hrs, hr_maps, names in dataloaders['val']:
             lrs = lrs.float().to(device)
@@ -271,31 +280,26 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
             lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
             cpsnr_values = validation_loss_calculator.get_cPSNR(hrs_tensor, srs, hr_maps)
+            tv_values = validation_loss_calculator.get_total_variation_loss(srs)
 
             all_lpips_values.append(lpips_values.detach().cpu())
             all_cpsnr_values.append(cpsnr_values.detach().cpu())
+            all_tv_values.append(tv_values.detach().cpu())
 
             srs = srs.detach().cpu().numpy()
 
         concated_lpips = torch.cat(all_lpips_values)
-        # concated_tv = torch.cat([t.unsqueeze(0) for t in all_tv_values])
         concated_cpnsr = torch.cat(all_cpsnr_values)
+        concated_tv = torch.cat([t.unsqueeze(0) for t in all_tv_values])
 
-        #val_score = validation_loss_calculator.get_simple_weighted_loss(concated_lpips, concated_cpnsr)
-        w1, w2 = get_weights([], [])
+        w1, w2, w3 = get_weights([], [], [])
 
         mean_lpips = torch.mean(concated_lpips)
         normalized_cpsnr = normalize_cpsnr(torch.mean(concated_cpnsr))
+        normalized_tv = normalize_tv(torch.mean(concated_tv))
         
-        val_score = mean_lpips * w1 + normalized_cpsnr * w2
+        val_score = mean_lpips * w1 + normalized_cpsnr * w2 + normalized_tv * w3
 
-        #detached_lpis = mean_lpips.detach().cpu().numpy()
-        #detached_cpsnr = normalized_cpsnr.detach().cpu().numpy()
-
-        #val_losses_1.append(detached_lpis)
-        #val_losses_2.append(detached_cpsnr)
-        
-        #validation_loss_calculator.update(concated_lpips, concated_tv)
         validation_loss_calculator.update_counter()
 
         if best_score > val_score:
