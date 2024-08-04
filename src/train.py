@@ -177,7 +177,6 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
             hr_maps = hr_maps.float().to(device)
             hrs = hrs.float().to(device)
 
-            # torch.autograd.set_detect_anomaly(mode=True)
             srs = fusion_model(lrs, alphas)  # fuse multi frames (B, 1, 3*W, 3*H)
 
             # Register batch wrt HR
@@ -185,11 +184,6 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
                                     srs[:, :, offset:(offset + 128), offset:(offset + 128)],
                                     reference=hrs[:, offset:(offset + 128), offset:(offset + 128)].view(-1, 1, 128, 128))
             srs_shifted = apply_shifts(regis_model, srs, shifts, device)[:, 0]
-
-            # Training loss
-            cropped_mask = torch_mask[0] * hr_maps  # Compute current mask (Batch size, W, H)
-            # srs_shifted = torch.clamp(srs_shifted, min=0.0, max=1.0)  # correct over/under-shoots
-            #loss = -get_loss(srs_shifted, hrs, cropped_mask, metric='cPSNR')
 
             srs_shifted_normalized = (srs_shifted - 0.5) * 2  # Normalize inputs for LPIPS
             hrs_normalized = (hrs - 0.5) * 2
@@ -286,10 +280,14 @@ def main(config):
         baseline_cpsnrs = readBaselineCPSNR(os.path.join(data_directory, "norm.csv"))
 
     train_set_directories = getImageSetDirectories(os.path.join(data_directory, "train"))
-
-    val_proportion = config['training']['val_proportion']
-    train_list, val_list = train_test_split(train_set_directories,
-                                            test_size=val_proportion,
+    val_set_directories = getImageSetDirectories(os.path.join(data_directory, "val"))
+    
+    train_list, _ = train_test_split(train_set_directories,
+                                            test_size=0,
+                                            random_state=1, shuffle=True)
+    
+    val_list, _ = train_test_split(val_set_directories,
+                                            test_size=0,
                                             random_state=1, shuffle=True)
 
     # Dataloaders
