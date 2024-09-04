@@ -43,6 +43,9 @@ def main():
         train_set_directories = getImageSetDirectories(os.path.join(prefix, "train"))
         save_clearance_scores(train_set_directories) # train data
 
+    if os.path.exists(os.path.join(prefix, "val")):
+        train_set_directories = getImageSetDirectories(os.path.join(prefix, "val"))
+        save_clearance_scores(train_set_directories) # train data
 
     if os.path.exists(os.path.join(prefix, "test")):
         test_set_directories = getImageSetDirectories(os.path.join(prefix, "test"))

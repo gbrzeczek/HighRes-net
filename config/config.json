@@ -1,6 +1,6 @@
 {
   "paths": {
-    "prefix": "data/",
+    "prefix": "data/normal_val/",
     "checkpoint_dir": "models/weights",
     "tb_log_file_dir": "tb_logs/"
   },
@@ -51,7 +51,7 @@
 
     "create_patches": true,
     "patch_size": 64,
-    "val_proportion": 0.1,
+    "val_proportion": 0,
     "lambda": 0.000001
   }
 }
