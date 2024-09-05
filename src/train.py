@@ -258,10 +258,14 @@ def main(config):
         baseline_cpsnrs = readBaselineCPSNR(os.path.join(data_directory, "norm.csv"))
 
     train_set_directories = getImageSetDirectories(os.path.join(data_directory, "train"))
-
-    val_proportion = config['training']['val_proportion']
-    train_list, val_list = train_test_split(train_set_directories,
-                                            test_size=val_proportion,
+    val_set_directories = getImageSetDirectories(os.path.join(data_directory, "val"))
+    
+    train_list, _ = train_test_split(train_set_directories,
+                                            test_size=0,
+                                            random_state=1, shuffle=True)
+    
+    val_list, _ = train_test_split(val_set_directories,
+                                            test_size=0,
                                             random_state=1, shuffle=True)
 
     # Dataloaders
