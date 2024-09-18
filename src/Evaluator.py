@@ -129,21 +129,21 @@ class MultiTaskLossCalculator:
     def get_cPSNR(self, hrs, srs, cropped_masks):
         return cPSNR_torch(srs, hrs, cropped_masks)
     
-    def get_simple_weighted_loss(self, lpips_values, tv_values):
-        lpips_weight = 0.7
-        tv_weight = 0.3
+    def get_simple_weighted_loss(self, lpips_values, cpsnr_values):
+        lpips_weight = 0.6
+        cpsnr_weight = 0.4
 
         mean_lpips = torch.mean(lpips_values)
-        mean_tv = torch.mean(tv_values)
+        mean_cpsnr = torch.mean(cpsnr_values)
 
         if self._writer:
             self._writer.add_scalar('lpips', mean_lpips, self._counter)
-            self._writer.add_scalar('tv', mean_tv, self._counter)
+            self._writer.add_scalar('cpsnr', mean_cpsnr, self._counter)
 
         lpips_w = mean_lpips * lpips_weight
-        tv_w = self._normalize_tv(mean_tv) * tv_weight
+        cpsnr_w = self._normalize_cpsnr(mean_cpsnr) * cpsnr_weight
 
-        return lpips_w + tv_w
+        return lpips_w + cpsnr_w
 
     def update_counter(self):
         self._counter += 1
@@ -152,3 +152,6 @@ class MultiTaskLossCalculator:
         top_value = 1500
 
         return tv_value / top_value
+
+    def _normalize_cpsnr(self, cpsnr_value):
+        return -cpsnr_value / 50

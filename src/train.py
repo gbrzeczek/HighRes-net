@@ -190,8 +190,8 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
 
 
             lpips_values = epoch_loss_calculator.get_lpips(hrs, srs_shifted)
-            tv_values = epoch_loss_calculator.get_total_variation_loss(srs_shifted)
-            loss = epoch_loss_calculator.get_simple_weighted_loss(lpips_values, tv_values)
+            cpsnr_values = epoch_loss_calculator.get_cPSNR(srs_shifted, hrs, hr_maps)
+            loss = epoch_loss_calculator.get_simple_weighted_loss(lpips_values, cpsnr_values)
 
             epoch_loss_calculator.update_counter()
 
@@ -207,8 +207,8 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
         fusion_model.eval()
         val_score = 0.0  # monitor val score
 
-        all_tv_values = []
         all_lpips_values = []
+        all_cpsnr_values = []
 
         for lrs, alphas, hrs, hr_maps, names in dataloaders['val']:
             lrs = lrs.float().to(device)
@@ -220,17 +220,17 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
             hrs_tensor = torch.from_numpy(hrs).float().to(device)
 
             lpips_values = validation_loss_calculator.get_lpips(hrs_tensor, srs)
-            tv_values = validation_loss_calculator.get_total_variation_loss(srs)
+            cpsnr_values = validation_loss_calculator.get_cPSNR(srs, hrs_tensor, hr_maps)
 
             all_lpips_values.append(lpips_values.detach().cpu())
-            all_tv_values.append(tv_values.detach().cpu())
+            all_cpsnr_values.append(cpsnr_values.detach().cpu())
 
             srs = srs.detach().cpu().numpy()
 
         concated_lpips = torch.cat(all_lpips_values)
-        concated_tv = torch.cat([t.unsqueeze(0) for t in all_tv_values])
+        concated_cpsnr = torch.cat(all_cpsnr_values)
 
-        val_score = validation_loss_calculator.get_simple_weighted_loss(concated_lpips, concated_tv)
+        val_score = validation_loss_calculator.get_simple_weighted_loss(concated_lpips, concated_cpsnr)
         
         #validation_loss_calculator.update(concated_lpips, concated_tv)
         validation_loss_calculator.update_counter()
