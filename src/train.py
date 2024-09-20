@@ -214,6 +214,7 @@ def trainAndGetBestModel(fusion_model, regis_model, optimizer, dataloaders, base
             lrs = lrs.float().to(device)
             alphas = alphas.float().to(device)
             hrs = hrs.numpy()  # Assuming this is the format before normalization; adjust if necessary
+            hr_maps = hr_maps.float().to(device)
 
             # Your existing code to compute SR images
             srs = fusion_model(lrs, alphas)[:, 0]  # fuse multi frames

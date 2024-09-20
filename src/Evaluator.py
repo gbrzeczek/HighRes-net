@@ -130,8 +130,8 @@ class MultiTaskLossCalculator:
         return cPSNR_torch(srs, hrs, cropped_masks)
     
     def get_simple_weighted_loss(self, lpips_values, cpsnr_values):
-        lpips_weight = 0.6
-        cpsnr_weight = 0.4
+        lpips_weight = 0.5
+        cpsnr_weight = 0.5
 
         mean_lpips = torch.mean(lpips_values)
         mean_cpsnr = torch.mean(cpsnr_values)
@@ -154,4 +154,4 @@ class MultiTaskLossCalculator:
         return tv_value / top_value
 
     def _normalize_cpsnr(self, cpsnr_value):
-        return -cpsnr_value / 50
+        return -(cpsnr_value - 40) / 10
